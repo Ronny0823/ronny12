@@ -696,6 +696,33 @@
           </button>
         </form>
 
+        <form id="resetPasswordForm" onsubmit="handleResetPasswordSubmit(event)" class="space-y-4 hidden">
+          <div class="text-center">
+            <h2 class="text-xl font-bold text-slate-100 mb-2">Nueva contrasena</h2>
+            <p class="text-sm text-slate-400">Escribe y confirma tu nueva contrasena para recuperar el acceso.</p>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-400 mb-2">Nueva contrasena</label>
+            <div class="relative">
+              <i data-lucide="key-round" class="w-5 h-5 text-slate-500 absolute left-3 top-3"></i>
+              <input type="password" id="resetNewPassword" required minlength="6" autocomplete="new-password" placeholder="Minimo 6 caracteres"
+                class="w-full pl-10 pr-4 py-3 bg-slate-800/50 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-600 input-focus">
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium text-slate-400 mb-2">Confirmar contrasena</label>
+            <div class="relative">
+              <i data-lucide="shield-check" class="w-5 h-5 text-slate-500 absolute left-3 top-3"></i>
+              <input type="password" id="resetConfirmPassword" required minlength="6" autocomplete="new-password" placeholder="Repite tu contrasena"
+                class="w-full pl-10 pr-4 py-3 bg-slate-800/50 border border-slate-700 rounded-lg text-slate-200 placeholder-slate-600 input-focus">
+            </div>
+          </div>
+          <button type="submit" class="w-full py-3 bg-primary-500 hover:bg-primary-400 text-slate-900 font-bold rounded-lg transition-all hover:shadow-lg hover:shadow-primary-500/20 flex items-center justify-center gap-2">
+            <i data-lucide="save" class="w-5 h-5"></i>
+            Guardar Nueva Contrasena
+          </button>
+        </form>
+
         <div id="authMessage" class="mt-4 p-3 rounded-lg text-sm hidden"></div>
       </div>
       <p class="text-center text-slate-500 text-xs mt-6">(c) 2026 Materiales del Norte. Todos los derechos reservados.</p>
@@ -1126,6 +1153,7 @@
       currentUser: null,
       recoveryMode: false,
       recoveryHandled: false,
+      recoverySessionReady: false,
       authListenerReady: false,
       mainAppStarted: false,
       clockTimer: null,
@@ -1235,6 +1263,20 @@
       showLogin() {
         document.getElementById('loginScreen').classList.remove('hidden');
         document.getElementById('mainApp').classList.add('hidden');
+        lucide.createIcons();
+      },
+
+      showPasswordResetForm() {
+        document.getElementById('loginScreen').classList.remove('hidden');
+        document.getElementById('mainApp').classList.add('hidden');
+        document.getElementById('loginForm')?.classList.add('hidden');
+        document.getElementById('registerForm')?.classList.add('hidden');
+        document.getElementById('resetPasswordForm')?.classList.remove('hidden');
+        document.getElementById('tabLogin')?.classList.remove('bg-primary-500', 'text-slate-900');
+        document.getElementById('tabLogin')?.classList.add('text-slate-400');
+        document.getElementById('tabRegister')?.classList.remove('bg-emerald-500', 'text-slate-900');
+        document.getElementById('tabRegister')?.classList.add('text-slate-400');
+        showAuthMessage('Enlace validado. Escribe tu nueva contrasena.', 'success');
         lucide.createIcons();
       },
 
@@ -1388,26 +1430,37 @@
           return;
         }
 
-        const newPassword = prompt('Escribe tu nueva contrasena');
-        if (!newPassword || newPassword.length < 6) {
-          showAuthMessage('La nueva contrasena debe tener al menos 6 caracteres', 'error');
-          return;
+        this.recoverySessionReady = true;
+        this.showPasswordResetForm();
+      },
+
+      async completePasswordRecovery(newPassword, confirmPassword) {
+        if (!this.recoverySessionReady) {
+          const recoveryReady = await this.activateRecoverySession();
+          if (!recoveryReady) return { success: false, message: 'El enlace de recuperacion no esta activo o ya expiro' };
+          this.recoverySessionReady = true;
         }
-        const confirmPassword = prompt('Confirma tu nueva contrasena');
+
+        if (!newPassword || newPassword.length < 6) {
+          return { success: false, message: 'La nueva contrasena debe tener al menos 6 caracteres' };
+        }
         if (newPassword !== confirmPassword) {
-          showAuthMessage('Las contrasenas no coinciden', 'error');
-          return;
+          return { success: false, message: 'Las contrasenas no coinciden' };
         }
 
         const { error } = await SupabaseSync.client.auth.updateUser({ password: newPassword });
         if (error) {
-          showAuthMessage(error.message || 'No se pudo actualizar la contrasena', 'error');
-          return;
+          return { success: false, message: error.message || 'No se pudo actualizar la contrasena' };
         }
 
-        showAuthMessage('Contrasena actualizada. Ya puedes iniciar sesion.', 'success');
         clearAuthUrlParams();
         await SupabaseSync.client.auth.signOut();
+        this.recoveryMode = false;
+        this.recoverySessionReady = false;
+        document.getElementById('resetPasswordForm')?.reset();
+        document.getElementById('resetPasswordForm')?.classList.add('hidden');
+        switchAuthTab('login');
+        return { success: true, message: 'Contrasena actualizada. Ya puedes iniciar sesion.' };
       }
     };
     const DataBackup = {
@@ -1558,9 +1611,11 @@
       const registerBtn = document.getElementById('tabRegister');
       const loginForm = document.getElementById('loginForm');
       const registerForm = document.getElementById('registerForm');
+      const resetPasswordForm = document.getElementById('resetPasswordForm');
       const message = document.getElementById('authMessage');
       
       message.classList.add('hidden');
+      resetPasswordForm?.classList.add('hidden');
       
       if (tab === 'login') {
         loginBtn.classList.add('bg-primary-500', 'text-slate-900');
@@ -1670,6 +1725,14 @@
     async function handleForgotPassword() {
       const email = safeText(document.getElementById('loginUsername').value);
       const result = await AuthSystem.sendPasswordReset(email);
+      showAuthMessage(result.message, result.success ? 'success' : 'error');
+    }
+
+    async function handleResetPasswordSubmit(event) {
+      event.preventDefault();
+      const newPassword = document.getElementById('resetNewPassword')?.value || '';
+      const confirmPassword = document.getElementById('resetConfirmPassword')?.value || '';
+      const result = await AuthSystem.completePasswordRecovery(newPassword, confirmPassword);
       showAuthMessage(result.message, result.success ? 'success' : 'error');
     }
 
